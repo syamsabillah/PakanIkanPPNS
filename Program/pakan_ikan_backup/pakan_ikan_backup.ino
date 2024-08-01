@@ -2,6 +2,12 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <WebServer.h>
+#include <EEPROM.h>
+
+#define EEPROM_SIZE 64
+WebServer server(80);
+
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <PubSubClient.h>
@@ -24,7 +30,7 @@
 #define LOADCELL_DT 37
 #define LOADCELL_SCK 31
 
-#define SET_PIN 4
+//#define SET_PIN 4
 
 #define RELAY_PIN_SOLENOID_DRUM2_KOLAM 27
 #define RELAY_PIN_SOLENOID_PH_ASAM 14
@@ -38,7 +44,15 @@
 #pragma endregion
 
 #pragma region HTML
-const char index_html[] PROGMEM = R"rawliteral(
+
+const char *apSSID = "Pakan Lele - IoT";
+const char *apPassword = "12345678";
+
+String ssid = "";
+String password = "";
+
+// HTML page to configure WiFi
+const char *htmlPage = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
@@ -97,7 +111,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 <body>
     <div class="container">
         <h2>WiFi Login</h2>
-        <form action="/" method="post">
+        <form action="/submit" method="post">
             <div class="form-group">
                 <label for="SSID">SSID:</label>
                 <input type="text" id="SSID" name="SSID" required>
@@ -127,6 +141,27 @@ const char index_html[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
+
+void handleRoot() {
+  server.send(200, "text/html", htmlPage);
+}
+
+void handleSubmit() {
+  ssid = server.arg("SSID");
+  password = server.arg("password");
+  
+  // Save WiFi credentials to EEPROM
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.writeString(0, ssid);
+  EEPROM.writeString(32, password);
+  EEPROM.commit();
+  
+  server.send(200, "text/html", "Configuration Saved. ESP will restart and try to connect to the specified network.");
+  
+  // Restart the ESP to apply the new WiFi settings
+  delay(1000);
+  ESP.restart();
+}
 #pragma endregion
 
 //Sensor DO
@@ -289,8 +324,8 @@ void startAP() {
             }
         }
         request->send(200, "text/html", index_html);
-//        delay(2000);
-//        ESP.restart();
+        //delay(2000);
+        //ESP.restart();
     });
 
     server.begin();
@@ -465,6 +500,7 @@ void setup() {
     Serial.begin(115200);
     Serial2.begin(9600);
 
+
     #pragma region Pin Mode
     pinMode(TURBIDITY_PIN_KOLAM, INPUT);
     pinMode(TURBIDITY_PIN_DRUM, INPUT);
@@ -474,7 +510,7 @@ void setup() {
     pinMode(DISSOLVED_OXYGEN_PIN, INPUT);
     pinMode(WATER_LEVEL_PIN_1, INPUT);
     pinMode(WATER_LEVEL_PIN_2, INPUT);
-    pinMode(SET_PIN, INPUT_PULLUP);
+   // pinMode(SET_PIN, INPUT_PULLUP);
     pinMode(RELAY_PIN_SOLENOID_DRUM2_KOLAM, OUTPUT);
     pinMode(RELAY_PIN_SOLENOID_PH_ASAM, OUTPUT);
     pinMode(RELAY_PIN_SOLENOID_PH_BASA, OUTPUT);
@@ -503,23 +539,47 @@ void setup() {
     servoLontar.write(75);
     #pragma endregion
 
-    pref.begin("Credentials");
-    
-    //STA_SSID = pref.getString("STA_SSID", "NoSSID");
-    //STA_PASS = pref.getString("STA_PASS", "NoPASS");
+     // Initialize EEPROM
+  EEPROM.begin(EEPROM_SIZE);
 
-    STA_SSID = "Andromax-";
-    
-        startAP();
-        log_n("Connecting to %s", STA_SSID);
-        WiFi.mode(WIFI_STA);
-        WiFi.begin(STA_SSID.c_str(), STA_PASS.c_str());
-        
-//        if(WiFi.status() != WL_CONNECTED) {
-//            log_n("Can't connect to %s", STA_SSID);
-//            startAP();
-            if(WiFi.status() == WL_CONNECTED) {
-            log_n("Connected to %s", STA_SSID);
+  // Start access point
+  WiFi.softAP(apSSID, apPassword);
+  Serial.println("Access Point Started");
+  Serial.print("AP IP Address: ");
+  Serial.println(WiFi.softAPIP());
+
+  // Start web server
+  server.on("/", handleRoot);
+  server.on("/submit", handleSubmit);
+  server.begin();
+  Serial.println("HTTP server started");
+
+  // Read WiFi credentials from EEPROM
+  ssid = EEPROM.readString(0);
+  password = EEPROM.readString(32);
+
+  // Try to connect to WiFi with stored credentials
+  if (ssid.length() > 0 && password.length() > 0) {
+    WiFi.begin(ssid.c_str(), password.c_str());
+    Serial.print("Connecting to WiFi: ");
+    Serial.println(ssid);
+
+    unsigned long startAttemptTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000) {
+      Serial.print(".");
+      delay(100);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("Connected!");
+      Serial.print("IP Address: ");
+      Serial.println(WiFi.localIP());
+      
+      // Close access point
+      WiFi.softAPdisconnect(true);
+      Serial.println("Access Point Closed");
+
+       log_n("Connected to %s", STA_SSID);
             WiFi.onEvent(WiFiStationDisconnected, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
             mqtt.setServer(mqttServer, mqttPort);
             mqtt.setCallback(messageHandler);
@@ -533,8 +593,19 @@ void setup() {
             } else {
                 log_n("MQTT subscription failed");
             }
-        }
-    
+
+      
+    } else {
+      Serial.println("Failed to connect, clearing EEPROM and restarting...");
+      EEPROM.begin(EEPROM_SIZE);
+      for (int i = 0; i < EEPROM_SIZE; i++) {
+        EEPROM.write(i, 0);
+      }
+      EEPROM.commit();
+      delay(1000);
+      ESP.restart();
+    }
+  }
 
     loadCell.begin(LOADCELL_DT, LOADCELL_SCK);
     loadCell.set_scale(LOADCELL_CAL);

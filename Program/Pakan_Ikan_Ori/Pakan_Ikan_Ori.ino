@@ -172,8 +172,8 @@ float ultrasonicDistance;
 
 String STA_SSID;
 String STA_PASS;
-const char* AP_SSID = "Pakan Lele - IoT";
-const char* AP_PASS = "12345678";
+String AP_SSID = "Pakan Lele - IoT";
+String AP_PASS = "12345678";
 
 const char* mqttServer = "broker.hivemq.com";
 const uint16_t mqttPort = 1883;
@@ -263,10 +263,9 @@ float getUltrasonicDistance(uint8_t *buffer) {
 }
 
 void startAP() {
-    log_n("Starting AP with name %s", AP_SSID);
-    log_n("Password: %s", AP_PASS);
+    log_n("Starting AP with name %s", AP_SSID.c_str());
+    log_n("Password: %s", AP_PASS.c_str());
     WiFi.mode(WIFI_AP);
-    
     WiFi.softAP(AP_SSID, AP_PASS);
 
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -289,8 +288,8 @@ void startAP() {
             }
         }
         request->send(200, "text/html", index_html);
-//        delay(2000);
-//        ESP.restart();
+        delay(2000);
+        ESP.restart();
     });
 
     server.begin();
@@ -505,21 +504,21 @@ void setup() {
 
     pref.begin("Credentials");
     
-    //STA_SSID = pref.getString("STA_SSID", "NoSSID");
-    //STA_PASS = pref.getString("STA_PASS", "NoPASS");
+    STA_SSID = pref.getString("STA_SSID", "NoSSID");
+    STA_PASS = pref.getString("STA_PASS", "NoPASS");
 
-    STA_SSID = "Andromax-";
-    
-        startAP();
-        log_n("Connecting to %s", STA_SSID);
+//    if(!digitalRead(SET_PIN)) {
+//        startAP();
+//    } else {
+        log_n("Connecting to %s", STA_SSID.c_str());
         WiFi.mode(WIFI_STA);
-        WiFi.begin(STA_SSID.c_str(), STA_PASS.c_str());
-        
-//        if(WiFi.status() != WL_CONNECTED) {
-//            log_n("Can't connect to %s", STA_SSID);
-//            startAP();
-            if(WiFi.status() == WL_CONNECTED) {
-            log_n("Connected to %s", STA_SSID);
+        WiFi.begin(STA_SSID, STA_PASS);
+        delay(5000);
+        if(WiFi.status() != WL_CONNECTED) {
+            log_n("Can't connect to %s", STA_SSID.c_str());
+            startAP();
+        } else {
+            log_n("Connected to %s", STA_SSID.c_str());
             WiFi.onEvent(WiFiStationDisconnected, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
             mqtt.setServer(mqttServer, mqttPort);
             mqtt.setCallback(messageHandler);
@@ -534,7 +533,7 @@ void setup() {
                 log_n("MQTT subscription failed");
             }
         }
-    
+//    }
 
     loadCell.begin(LOADCELL_DT, LOADCELL_SCK);
     loadCell.set_scale(LOADCELL_CAL);
